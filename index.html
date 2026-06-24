@@ -33,7 +33,7 @@
 
     <section id="dashboard" class="panel active">
       <div class="section-title">
-        <h2>품목별 현재 재고</h2>
+        <h2>카테고리별 현재 재고</h2>
         <button class="small" id="exportBtn">CSV 내보내기</button>
       </div>
       <div id="stockList" class="list"></div>
@@ -42,7 +42,10 @@
     <section id="movement" class="panel">
       <div class="card">
         <h2>입출고 입력</h2>
-        <label>품목
+        <label>카테고리
+          <select id="movementCategory"></select>
+        </label>
+        <label>상세품목
           <select id="movementItem"></select>
         </label>
         <div class="segmented">
@@ -61,19 +64,29 @@
 
     <section id="items" class="panel">
       <div class="card">
-        <h2>품목 추가</h2>
-        <label>품목명
+        <h2>카테고리 추가</h2>
+        <label>카테고리명
+          <input id="newCategoryName" type="text" placeholder="예: 음료, 식자재, 소모품" />
+        </label>
+        <button id="addCategory" class="primary">카테고리 추가</button>
+      </div>
+
+      <div class="card mt">
+        <h2>상세품목 추가</h2>
+        <label>카테고리
+          <select id="newItemCategory"></select>
+        </label>
+        <label>상세품목명
           <input id="newItemName" type="text" placeholder="예: 생수 500ml" />
         </label>
         <label>초기 재고
           <input id="newItemStock" type="number" min="0" inputmode="numeric" placeholder="0" />
         </label>
-        <label>부족 기준 수량
-          <input id="newItemLow" type="number" min="0" inputmode="numeric" placeholder="예: 5" />
-        </label>
-        <button id="addItem" class="primary">품목 추가</button>
+        <p class="hint">재고 부족 알림 기준은 <b>30개 미만</b>입니다.</p>
+        <button id="addItem" class="primary">상세품목 추가</button>
       </div>
-      <div class="section-title"><h2>품목 수정</h2></div>
+
+      <div class="section-title"><h2>카테고리 / 상세품목 수정</h2></div>
       <div id="itemManageList" class="list"></div>
     </section>
 
