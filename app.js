@@ -1,75 +1,121 @@
-const KEY='inventory-pwa-v1';
-const LOW_THRESHOLD=30;
-let movementType='in';let deferredPrompt=null;
-const $=id=>document.getElementById(id);
-const makeId=()=>crypto.randomUUID();
-const seed={categories:[{id:makeId(),name:'기본 카테고리'}],items:[],history:[]};
-function load(){try{return JSON.parse(localStorage.getItem(KEY))||seed}catch{return seed}}
-function save(data){localStorage.setItem(KEY,JSON.stringify(data))}
-function migrate(d){
-  if(!d.categories||!Array.isArray(d.categories)||!d.categories.length){d.categories=[{id:makeId(),name:'기본 카테고리'}]}
-  if(!Array.isArray(d.items))d.items=[]; if(!Array.isArray(d.history))d.history=[];
-  d.items.forEach(i=>{if(!i.categoryId)i.categoryId=d.categories[0].id; i.low=LOW_THRESHOLD});
-  return d;
-}
-let data=migrate(load());save(data);
-function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)}
-function fmt(n){return Number(n||0).toLocaleString('ko-KR')}
-function now(){return new Date().toLocaleString('ko-KR',{hour12:false})}
-function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
-function catName(id){return data.categories.find(c=>c.id===id)?.name||'미지정'}
-function isLow(i){return Number(i.stock||0)<LOW_THRESHOLD}
-function optionCategories(selected=''){
-  return data.categories.map(c=>`<option value="${c.id}" ${c.id===selected?'selected':''}>${esc(c.name)}</option>`).join('')||'<option>카테고리 없음</option>';
-}
-function itemsInCat(catId){return data.items.filter(i=>i.categoryId===catId).sort((a,b)=>a.name.localeCompare(b.name,'ko'))}
-function render(){
- $('totalItems').textContent=fmt(data.items.length);
- $('totalStock').textContent=fmt(data.items.reduce((s,i)=>s+Number(i.stock||0),0));
- $('lowItems').textContent=fmt(data.items.filter(isLow).length);
+const STORE_KEY = 'inventory-app-v3';
+const LOW_LIMIT = 30;
+const defaultMajors = ['AF','CR','PO','EG','GI','PS','CO','HR','GC','AC'];
+const defaultMinors = ['0.5','0.8','1','1.2','1.5','1.6','2.0','2.3','3','3.2','4','4.5','5','6','8','9','10','12','15','16','19','20'];
 
- const stockList=$('stockList');stockList.innerHTML=data.categories.length?'':'<div class="card">등록된 카테고리가 없습니다.</div>';
- data.categories.forEach(c=>{
-   const items=itemsInCat(c.id); const total=items.reduce((s,i)=>s+Number(i.stock||0),0); const lowCnt=items.filter(isLow).length;
-   stockList.insertAdjacentHTML('beforeend',`<div class="category-card"><div class="category-head"><div><div class="row-title">${esc(c.name)}</div><div class="row-sub">상세품목 ${fmt(items.length)}개 · 총 재고 ${fmt(total)}개 · 부족 ${fmt(lowCnt)}개</div></div></div><div class="inner-list" id="cat-${c.id}"></div></div>`);
-   const box=document.getElementById(`cat-${c.id}`);
-   box.innerHTML=items.length?'':'<div class="empty">등록된 상세품목이 없습니다.</div>';
-   items.forEach(i=>{box.insertAdjacentHTML('beforeend',`<div class="row compact"><div class="row-main"><div class="row-title">${esc(i.name)}</div><div class="row-sub">부족 알림: 30개 미만</div></div><span class="badge ${isLow(i)?'low':''}">${fmt(i.stock)}개${isLow(i)?' ⚠️':''}</span></div>`)});
- });
+const $ = (id) => document.getElementById(id);
+let state = loadState();
+let deferredPrompt = null;
 
- $('newItemCategory').innerHTML=optionCategories();
- $('movementCategory').innerHTML=optionCategories($('movementCategory').value||data.categories[0]?.id);
- renderMovementItems();
-
- const manage=$('itemManageList');manage.innerHTML=data.categories.length?'':'<div class="card">수정할 카테고리가 없습니다.</div>';
- data.categories.forEach(c=>{
-   const items=itemsInCat(c.id);
-   manage.insertAdjacentHTML('beforeend',`<div class="category-card"><div class="category-head"><div><div class="row-title">${esc(c.name)}</div><div class="row-sub">상세품목 ${fmt(items.length)}개</div></div><div class="actions"><button onclick="renameCategory('${c.id}')">카테고리명 변경</button><button class="delete" onclick="deleteCategory('${c.id}')">삭제</button></div></div><div class="inner-list" id="manage-${c.id}"></div></div>`);
-   const box=document.getElementById(`manage-${c.id}`);box.innerHTML=items.length?'':'<div class="empty">상세품목 없음</div>';
-   items.forEach(i=>box.insertAdjacentHTML('beforeend',`<div class="row compact"><div class="row-main"><div class="row-title">${esc(i.name)}</div><div class="row-sub">현재 ${fmt(i.stock)}개 · 부족 기준 30개 미만</div></div><div class="actions"><button onclick="renameItem('${i.id}')">품목명</button><button onclick="moveItem('${i.id}')">카테고리</button><button onclick="adjustItem('${i.id}')">재고</button><button class="delete" onclick="deleteItem('${i.id}')">삭제</button></div></div>`));
- });
-
- const hist=$('historyList');hist.innerHTML=data.history.length?'':'<div class="card">입출고 내역이 없습니다.</div>';
- data.history.slice().reverse().slice(0,100).forEach(h=>hist.insertAdjacentHTML('beforeend',`<div class="row"><div class="row-main"><div class="row-title">${esc(h.itemName)}</div><div class="row-sub">${esc(h.categoryName||'')} ${h.categoryName?'· ':''}${h.date}${h.memo?' · '+esc(h.memo):''}</div></div><span class="badge ${h.type}">${h.type==='in'?'입고':'출고'} ${fmt(h.qty)}</span></div>`));
+function loadState(){
+  const saved = localStorage.getItem(STORE_KEY);
+  if(saved){
+    try { return JSON.parse(saved); } catch(e) {}
+  }
+  return { majors:[...defaultMajors], minors:[...defaultMinors], stocks:{}, history:[] };
 }
-function renderMovementItems(){
- const catId=$('movementCategory').value||data.categories[0]?.id; const items=itemsInCat(catId);
- $('movementItem').innerHTML=items.map(i=>`<option value="${i.id}">${esc(i.name)} / 현재 ${fmt(i.stock)}개</option>`).join('')||'<option value="">상세품목 없음</option>';
+function saveState(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function key(major, minor){ return `${major}__${minor}`; }
+function labelFromKey(k){ return k.replace('__',' '); }
+function stockQty(major, minor){ return Number(state.stocks[key(major, minor)] || 0); }
+function setStock(major, minor, qty){ state.stocks[key(major, minor)] = Math.max(0, Number(qty)||0); }
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),1800); }
+
+function renderAll(){
+  renderSelectors(); renderDashboard(); renderCategoryChips(); renderHistory();
 }
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab,.panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active');render()});
-$('movementCategory').onchange=renderMovementItems;
-$('inBtn').onclick=()=>{movementType='in';$('inBtn').classList.add('selected');$('outBtn').classList.remove('selected')};$('outBtn').onclick=()=>{movementType='out';$('outBtn').classList.add('selected');$('inBtn').classList.remove('selected')};
-$('addCategory').onclick=()=>{const name=$('newCategoryName').value.trim();if(!name)return toast('카테고리명을 입력하세요.');if(data.categories.some(c=>c.name===name))return toast('이미 있는 카테고리입니다.');data.categories.push({id:makeId(),name});save(data);$('newCategoryName').value='';render();toast('카테고리가 추가되었습니다.')};
-$('addItem').onclick=()=>{const categoryId=$('newItemCategory').value;const name=$('newItemName').value.trim();const stock=Number($('newItemStock').value||0);if(!categoryId)return toast('카테고리를 먼저 추가하세요.');if(!name)return toast('상세품목명을 입력하세요.');if(data.items.some(i=>i.categoryId===categoryId&&i.name===name))return toast('해당 카테고리에 이미 있는 품목입니다.');data.items.push({id:makeId(),categoryId,name,stock,low:LOW_THRESHOLD});if(stock>0)data.history.push({categoryName:catName(categoryId),itemName:name,type:'in',qty:stock,memo:'초기 재고',date:now()});save(data);$('newItemName').value='';$('newItemStock').value='';render();toast('상세품목이 추가되었습니다.')};
-$('saveMovement').onclick=()=>{if(!data.items.length)return toast('먼저 상세품목을 추가하세요.');const item=data.items.find(i=>i.id===$('movementItem').value);const qty=Number($('qtyInput').value);const memo=$('memoInput').value.trim();if(!item)return toast('상세품목을 선택하세요.');if(!qty||qty<1)return toast('수량을 확인하세요.');if(movementType==='out'&&item.stock<qty&&!confirm('현재 재고보다 출고 수량이 큽니다. 계속 진행할까요?'))return;item.stock+=movementType==='in'?qty:-qty;data.history.push({categoryName:catName(item.categoryId),itemName:item.name,type:movementType,qty,memo,date:now()});save(data);$('qtyInput').value='';$('memoInput').value='';render();toast(isLow(item)?'저장되었습니다. 재고 부족 품목입니다.':'저장되었습니다.')};
-window.renameCategory=id=>{const c=data.categories.find(x=>x.id===id);const name=prompt('변경할 카테고리명을 입력하세요.',c.name);if(!name||!name.trim())return;c.name=name.trim();save(data);render();toast('카테고리명이 변경되었습니다.')}
-window.deleteCategory=id=>{const c=data.categories.find(x=>x.id===id);const cnt=data.items.filter(i=>i.categoryId===id).length;if(cnt>0)return toast('상세품목이 있는 카테고리는 삭제할 수 없습니다.');if(!confirm(`${c.name} 카테고리를 삭제할까요?`))return;data.categories=data.categories.filter(c=>c.id!==id);save(data);render();toast('카테고리가 삭제되었습니다.')}
-window.renameItem=id=>{const item=data.items.find(i=>i.id===id);const name=prompt('변경할 상세품목명을 입력하세요.',item.name);if(!name||!name.trim())return;item.name=name.trim();save(data);render();toast('상세품목명이 변경되었습니다.')}
-window.moveItem=id=>{const item=data.items.find(i=>i.id===id);const names=data.categories.map((c,idx)=>`${idx+1}. ${c.name}`).join('\n');const n=prompt(`이동할 카테고리 번호를 입력하세요.\n${names}`);const idx=Number(n)-1;if(isNaN(idx)||!data.categories[idx])return;item.categoryId=data.categories[idx].id;save(data);render();toast('카테고리가 변경되었습니다.')}
-window.adjustItem=id=>{const item=data.items.find(i=>i.id===id);const stock=prompt('현재 재고 수량을 입력하세요.',item.stock);if(stock===null||isNaN(Number(stock)))return;item.stock=Number(stock);save(data);render();toast('재고가 수정되었습니다.')}
-window.deleteItem=id=>{const item=data.items.find(i=>i.id===id);if(!confirm(`${item.name} 상세품목을 삭제할까요?`))return;data.items=data.items.filter(i=>i.id!==id);save(data);render();toast('삭제되었습니다.')}
-$('clearHistory').onclick=()=>{if(confirm('입출고 내역만 삭제할까요? 현재 재고는 유지됩니다.')){data.history=[];save(data);render();toast('내역이 삭제되었습니다.')}};
-$('exportBtn').onclick=()=>{const rows=[['카테고리','상세품목명','현재재고','부족알림기준'],...data.items.map(i=>[catName(i.categoryId),i.name,i.stock,'30개 미만'])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='재고현황.csv';a.click()};
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;$('installBtn').classList.add('hidden')}};
-if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js')}
-render();
+function renderSelectors(){
+  const selects = [$('moveMajor'), $('majorFilter')];
+  selects.forEach(sel => {
+    const current = sel.value;
+    sel.innerHTML = sel.id === 'majorFilter' ? '<option value="">전체 대분류</option>' : '';
+    state.majors.forEach(m => sel.insertAdjacentHTML('beforeend', `<option value="${m}">${m}</option>`));
+    if([...sel.options].some(o=>o.value===current)) sel.value = current;
+  });
+  const minorSel = $('moveMinor');
+  const currentMinor = minorSel.value;
+  minorSel.innerHTML = '';
+  state.minors.forEach(m => minorSel.insertAdjacentHTML('beforeend', `<option value="${m}">${m}</option>`));
+  if([...minorSel.options].some(o=>o.value===currentMinor)) minorSel.value = currentMinor;
+}
+function allCombinations(){
+  const rows=[];
+  state.majors.forEach(major=>state.minors.forEach(minor=>rows.push({major,minor,name:`${major} ${minor}`,qty:stockQty(major,minor)})));
+  return rows;
+}
+function renderDashboard(){
+  const search = $('searchInput').value.trim().toLowerCase();
+  const majorFilter = $('majorFilter').value;
+  const rows = allCombinations();
+  const totalStock = rows.reduce((a,r)=>a+r.qty,0);
+  const lowRows = rows.filter(r=>r.qty < LOW_LIMIT);
+  $('totalItems').textContent = rows.length;
+  $('totalStock').textContent = totalStock.toLocaleString('ko-KR');
+  $('lowCount').textContent = lowRows.length;
+  const filtered = rows.filter(r=>(!majorFilter||r.major===majorFilter) && (!search||r.name.toLowerCase().includes(search)));
+  $('stockList').innerHTML = filtered.length ? filtered.map(r=>`
+    <article class="stock-card ${r.qty<LOW_LIMIT?'low':''}">
+      <div class="name">${r.name}</div>
+      <div class="qty ${r.qty<LOW_LIMIT?'low-text':''}">${r.qty.toLocaleString('ko-KR')}</div>
+      <div class="sub">${r.qty<LOW_LIMIT?'부족 재고':'정상 재고'}</div>
+    </article>`).join('') : '<p class="notice">표시할 품목이 없습니다.</p>';
+  $('lowStockList').innerHTML = lowRows.length ? lowRows.slice(0,30).map(r=>`
+    <div class="mini-row"><span>${r.name}</span><strong>${r.qty}</strong></div>`).join('') : '<p class="notice">부족 재고가 없습니다.</p>';
+}
+function renderCategoryChips(){
+  $('majorChips').innerHTML = state.majors.map(v=>`<span class="chip">${v}<button data-type="major" data-value="${v}">×</button></span>`).join('');
+  $('minorChips').innerHTML = state.minors.map(v=>`<span class="chip">${v}<button data-type="minor" data-value="${v}">×</button></span>`).join('');
+}
+function renderHistory(){
+  $('historyList').innerHTML = state.history.length ? state.history.map(h=>`
+    <div class="history-row">
+      <div><b>${h.major} ${h.minor}</b><br><small>${h.date}${h.memo ? ' · '+escapeHtml(h.memo) : ''}</small></div>
+      <span class="${h.type}">${h.type==='in' ? '+' : '-'}${Number(h.qty).toLocaleString('ko-KR')}</span>
+    </div>`).join('') : '<p class="notice">입출고 내역이 없습니다.</p>';
+}
+function escapeHtml(str){ return String(str).replace(/[&<>'"]/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s])); }
+function addUnique(list, value){
+  const clean = value.trim().toUpperCase();
+  if(!clean) return false;
+  if(list.includes(clean)) return false;
+  list.push(clean); list.sort((a,b)=>a.localeCompare(b, 'ko', {numeric:true})); return true;
+}
+function deleteCategory(type, value){
+  if(!confirm(`${value} 삭제 시 관련 재고와 내역도 삭제됩니다. 진행할까요?`)) return;
+  if(type==='major') state.majors = state.majors.filter(v=>v!==value);
+  if(type==='minor') state.minors = state.minors.filter(v=>v!==value);
+  Object.keys(state.stocks).forEach(k=>{
+    const [mj,mn]=k.split('__');
+    if((type==='major'&&mj===value)||(type==='minor'&&mn===value)) delete state.stocks[k];
+  });
+  state.history = state.history.filter(h=> type==='major' ? h.major!==value : h.minor!==value);
+  saveState(); renderAll(); toast('삭제되었습니다.');
+}
+
+document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{
+  document.querySelectorAll('.tab,.view').forEach(el=>el.classList.remove('active'));
+  btn.classList.add('active'); $(btn.dataset.view).classList.add('active');
+  renderAll();
+}));
+$('searchInput').addEventListener('input', renderDashboard);
+$('majorFilter').addEventListener('change', renderDashboard);
+$('movementForm').addEventListener('submit', e=>{
+  e.preventDefault();
+  const major=$('moveMajor').value, minor=$('moveMinor').value, qty=Number($('moveQty').value), type=document.querySelector('input[name="type"]:checked').value, memo=$('moveMemo').value.trim();
+  if(!major || !minor || !qty || qty < 1) return toast('입력값을 확인하세요.');
+  const current = stockQty(major, minor);
+  if(type==='out' && current < qty) return toast('출고 수량이 현재 재고보다 많습니다.');
+  setStock(major, minor, type==='in' ? current + qty : current - qty);
+  state.history.unshift({major, minor, qty, type, memo, date:new Date().toLocaleString('ko-KR')});
+  state.history = state.history.slice(0,300);
+  saveState(); e.target.reset(); renderAll(); toast(type==='in'?'입고 저장 완료':'출고 저장 완료');
+});
+$('majorForm').addEventListener('submit', e=>{ e.preventDefault(); if(addUnique(state.majors, $('majorName').value)){ saveState(); renderAll(); toast('대분류 추가 완료'); } $('majorName').value=''; });
+$('minorForm').addEventListener('submit', e=>{ e.preventDefault(); const v=$('minorName').value.trim(); if(!v) return; if(!state.minors.includes(v)){ state.minors.push(v); state.minors.sort((a,b)=>Number(a)-Number(b)); saveState(); renderAll(); toast('소분류 추가 완료'); } $('minorName').value=''; });
+document.addEventListener('click', e=>{ if(e.target.matches('.chip button')) deleteCategory(e.target.dataset.type, e.target.dataset.value); });
+$('clearHistory').addEventListener('click',()=>{ if(confirm('입출고 내역만 삭제할까요? 재고 수량은 유지됩니다.')){ state.history=[]; saveState(); renderHistory(); toast('내역 삭제 완료'); }});
+
+window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferredPrompt=e; $('installBtn').classList.remove('hidden'); });
+$('installBtn').addEventListener('click', async()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); deferredPrompt=null; $('installBtn').classList.add('hidden'); });
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
+renderAll();
